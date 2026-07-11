@@ -6,6 +6,8 @@ App pessoal de foco: energia por projeto, congelador de ideias, lifecycle AFOS/g
 1. Cria projeto em supabase.com
 2. Corre `supabase_schema.sql` (na raiz do zip, um nível acima) no SQL Editor
 3. Copia Project URL e anon key de Project Settings → API
+4. Em **Authentication → URL Configuration**, define o "Site URL" como o teu domínio Vercel (depois de fazeres o deploy) — sem isto o link de login pode redirecionar mal
+5. Por defeito o login é por "magic link" (email, sem password). Não precisas de configurar mais nada — o Supabase já envia o email automaticamente
 
 ## 2. Configurar localmente
 ```
