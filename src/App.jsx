@@ -302,9 +302,10 @@ function rowToFrozen(r) {
   };
 }
 
-async function saveProject(p) {
+async function saveProject(p, userId) {
   await supabase.from("projects").upsert({
     id: p.id,
+    user_id: userId,
     title: p.title,
     tag: p.tag,
     energy: p.energy,
@@ -316,9 +317,10 @@ async function saveProject(p) {
   });
 }
 
-async function saveFrozen(f) {
+async function saveFrozen(f, userId) {
   await supabase.from("frozen_ideas").upsert({
     id: f.id,
+    user_id: userId,
     title: f.title,
     tag: f.tag,
     stage: f.stage,
@@ -337,7 +339,8 @@ async function deleteFrozenRow(id) {
   await supabase.from("frozen_ideas").delete().eq("id", id);
 }
 
-export default function App() {
+function FocusApp({ session }) {
+  const userId = session.user.id;
   const [projects, setProjects] = useState([]);
   const [frozen, setFrozen] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -357,8 +360,8 @@ export default function App() {
   useEffect(() => {
     (async () => {
       const [{ data: projRows, error: e1 }, { data: frozRows, error: e2 }] = await Promise.all([
-        supabase.from("projects").select("*").order("created_at"),
-        supabase.from("frozen_ideas").select("*").order("created_at"),
+        supabase.from("projects").select("*").eq("user_id", userId).order("created_at"),
+        supabase.from("frozen_ideas").select("*").eq("user_id", userId).order("created_at"),
       ]);
       if (!e1 && projRows) setProjects(projRows.map(rowToProject));
       if (!e2 && frozRows) setFrozen(frozRows.map(rowToFrozen));
@@ -368,12 +371,12 @@ export default function App() {
 
   useEffect(() => {
     if (loading) return;
-    projects.forEach(saveProject);
+    projects.forEach((p) => saveProject(p, userId));
   }, [projects, loading]);
 
   useEffect(() => {
     if (loading) return;
-    frozen.forEach(saveFrozen);
+    frozen.forEach((f) => saveFrozen(f, userId));
   }, [frozen, loading]);
 
   const active = useMemo(
@@ -578,6 +581,15 @@ export default function App() {
             aria-label="Adicionar ideia"
           >
             +
+          </button>
+          <button
+            onClick={() => supabase.auth.signOut()}
+            className="w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold"
+            style={{ background: "#141917", color: "#6B756D", border: "1px solid #22281f" }}
+            aria-label="Sair"
+            title="Sair"
+          >
+            ⏻
           </button>
         </div>
       </div>
@@ -1102,4 +1114,97 @@ export default function App() {
       </div>
     </div>
   );
+}
+
+function LoginScreen() {
+  const [email, setEmail] = useState("");
+  const [sent, setSent] = useState(false);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  async function sendLink(e) {
+    e.preventDefault();
+    if (!email.trim()) return;
+    setLoading(true);
+    setError("");
+    const { error } = await supabase.auth.signInWithOtp({
+      email: email.trim(),
+      options: { emailRedirectTo: window.location.origin },
+    });
+    setLoading(false);
+    if (error) setError(error.message);
+    else setSent(true);
+  }
+
+  return (
+    <div
+      className="min-h-screen w-full flex flex-col items-center justify-center px-6"
+      style={{ background: "#0B0F0E", fontFamily: "'Inter', sans-serif" }}
+    >
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;700&family=Inter:wght@400;500;600&display=swap');
+        .display { font-family: 'Space Grotesk', sans-serif; }
+      `}</style>
+      <p className="text-xs uppercase tracking-widest mb-2" style={{ color: "#6B756D" }}>
+        Atrium Factory
+      </p>
+      <h1 className="display text-3xl font-bold mb-8" style={{ color: "#F2F5EC" }}>
+        Focus
+      </h1>
+
+      {sent ? (
+        <div className="w-full max-w-sm rounded-3xl p-6 text-center" style={{ background: "#F2F5EC" }}>
+          <p className="text-sm" style={{ color: "#0B0F0E" }}>
+            Enviámos um link de acesso para <strong>{email}</strong>. Abre-o neste telemóvel para entrares.
+          </p>
+        </div>
+      ) : (
+        <form onSubmit={sendLink} className="w-full max-w-sm rounded-3xl p-6" style={{ background: "#F2F5EC" }}>
+          <p className="text-sm mb-4" style={{ color: "#6B756D" }}>
+            Entra com o teu email. Sem password — enviamos-te um link de acesso.
+          </p>
+          <input
+            type="email"
+            autoFocus
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="teu@email.com"
+            className="w-full px-4 py-3 rounded-xl mb-3 text-sm outline-none"
+            style={{ background: "#fff", border: "1px solid #d8ddd0", color: "#0B0F0E" }}
+          />
+          {error && <p className="text-xs mb-3" style={{ color: "#b0453a" }}>{error}</p>}
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full py-3 rounded-2xl font-semibold text-sm"
+            style={{ background: "#C6FF3D", color: "#0B0F0E" }}
+          >
+            {loading ? "A enviar..." : "Enviar link de acesso"}
+          </button>
+        </form>
+      )}
+    </div>
+  );
+}
+
+export default function App() {
+  const [session, setSession] = useState(undefined); // undefined = a verificar, null = sem sessão
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => setSession(data.session));
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, s) => setSession(s));
+    return () => listener.subscription.unsubscribe();
+  }, []);
+
+  if (session === undefined) {
+    return (
+      <div className="min-h-screen w-full flex items-center justify-center" style={{ background: "#0B0F0E" }}>
+        <p className="text-sm" style={{ color: "#6B756D" }}>A carregar...</p>
+      </div>
+    );
+  }
+
+  if (!session) return <LoginScreen />;
+
+  return <FocusApp session={session} />;
 }
