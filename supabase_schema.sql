@@ -1,4 +1,8 @@
 -- Atrium Focus App — schema com autenticação
+-- Apaga tabelas antigas (se existirem) antes de recriar
+
+drop table if exists projects;
+drop table if exists frozen_ideas;
 
 create table projects (
   id uuid primary key default gen_random_uuid(),
