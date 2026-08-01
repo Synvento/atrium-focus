@@ -142,31 +142,95 @@ const DEFAULT_TASKS = {
 const STAGES_AFOS = STAGES;
 
 const STAGES_GENERIC = [
-  "Ideia",
-  "Definição",
-  "Construção",
-  "Lançamento",
-  "Monitorização",
-  "Velocidade Cruzeiro",
+  "Opportunity",
+  "Validation",
+  "Strategy",
+  "Architecture",
+  "Build",
+  "Launch",
+  "Grow",
+  "Optimize",
+  "Scale",
 ];
 
 const GENERIC_OBJECTIVES = {
-  "Ideia": "Registar e explorar a oportunidade.",
-  "Definição": "Definir o que se vai construir e para quem.",
-  "Construção": "Executar e construir o essencial.",
-  "Lançamento": "Colocar no mercado.",
-  "Monitorização": "Acompanhar resultados iniciais.",
-  "Velocidade Cruzeiro": "Manter e otimizar em regime estável.",
+  "Opportunity": "Encontrar uma oportunidade com potencial.",
+  "Validation": "Validar que a oportunidade merece ser desenvolvida.",
+  "Strategy": "Definir a estratégia do produto.",
+  "Architecture": "Desenhar a estrutura completa do produto.",
+  "Build": "Construir o produto.",
+  "Launch": "Colocar o produto no mercado.",
+  "Grow": "Aumentar clientes e vendas.",
+  "Optimize": "Melhorar continuamente o produto e o negócio.",
+  "Scale": "Escalar o negócio.",
 };
 
 const DEFAULT_TASKS_GENERIC = {
-  "Ideia": ["Registar a oportunidade", "Definir o problema principal", "Avaliar se vale a pena avançar"],
-  "Definição": ["Definir público-alvo", "Definir proposta de valor", "Definir âmbito mínimo"],
-  "Construção": ["Construir versão inicial", "Testar fluxo principal", "Preparar para lançar"],
-  "Lançamento": ["Publicar / disponibilizar", "Comunicar a quem interessa", "Recolher primeiras reações"],
-  "Monitorização": ["Rever resultados iniciais", "Ajustar o que não está a funcionar"],
-  "Velocidade Cruzeiro": ["Rever métricas periodicamente", "Otimizar o que já existe", "Decidir manter, escalar ou encerrar"],
+  "Opportunity": [
+    "Identificar um problema ou necessidade",
+    "Analisar o mercado",
+    "Identificar o público-alvo",
+    "Analisar a concorrência",
+    "Identificar gaps e oportunidades",
+  ],
+  "Validation": [
+    "Validar a procura",
+    "Validar a vontade de pagar",
+    "Avaliar a concorrência",
+    "Avaliar a viabilidade",
+    "Decidir: Avançar, Reformular ou Abandonar",
+  ],
+  "Strategy": [
+    "Definir o posicionamento",
+    "Definir a proposta de valor",
+    "Definir a transformação prometida",
+    "Escolher o formato do produto",
+    "Definir a oferta",
+    "Definir o modelo de negócio",
+    "Definir o pricing",
+  ],
+  "Architecture": [
+    "Definir a arquitetura do produto",
+    "Definir funcionalidades ou conteúdos",
+    "Definir a experiência do utilizador (UX)",
+    "Criar a identidade da marca (branding e naming)",
+    "Criar o blueprint do produto",
+  ],
+  "Build": [
+    "Planear o desenvolvimento",
+    "Construir o produto",
+    "Testar e corrigir erros",
+    "Preparar a versão final",
+  ],
+  "Launch": [
+    "Criar a landing page",
+    "Configurar pagamentos e entrega",
+    "Preparar os conteúdos de lançamento",
+    "Configurar marketing e analytics",
+    "Lançar o produto",
+  ],
+  "Grow": [
+    "Atrair novos clientes",
+    "Criar conteúdo e SEO",
+    "Desenvolver parcerias e afiliados",
+    "Melhorar a retenção de clientes",
+  ],
+  "Optimize": [
+    "Recolher feedback",
+    "Analisar métricas",
+    "Melhorar o produto",
+    "Melhorar a conversão",
+    "Automatizar processos",
+  ],
+  "Scale": [
+    "Automatizar operações",
+    "Expandir para novos mercados",
+    "Criar novos produtos ou ofertas",
+    "Internacionalizar",
+    "Construir um ecossistema de produtos",
+  ],
 };
+
 
 function stagesFor(lifecycle) {
   return lifecycle === "generic" ? STAGES_GENERIC : STAGES_AFOS;
