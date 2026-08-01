@@ -339,34 +339,119 @@ async function deleteFrozenRow(id) {
   await supabase.from("frozen_ideas").delete().eq("id", id);
 }
 
+function rowToIdea(r) {
+  return {
+    id: r.id,
+    title: r.title,
+    category: r.category || "",
+    summary: r.summary || "",
+    problem: r.problem || "",
+    differentiator: r.differentiator || "",
+    targetAudience: r.target_audience || "",
+    standbyReason: r.standby_reason || "",
+    nextStep: r.next_step || "",
+    notes: r.notes || "",
+    sourceContent: r.source_content || "",
+    promotedToProjectId: r.promoted_to_project_id || null,
+    promotedAt: r.promoted_at || null,
+    createdAt: r.created_at,
+  };
+}
+
+async function saveIdea(idea, userId) {
+  await supabase.from("ideas").upsert({
+    id: idea.id,
+    user_id: userId,
+    title: idea.title,
+    category: idea.category,
+    summary: idea.summary,
+    problem: idea.problem,
+    differentiator: idea.differentiator,
+    target_audience: idea.targetAudience,
+    standby_reason: idea.standbyReason,
+    next_step: idea.nextStep,
+    notes: idea.notes,
+    source_content: idea.sourceContent,
+    promoted_to_project_id: idea.promotedToProjectId,
+    promoted_at: idea.promotedAt,
+  });
+}
+
+async function deleteIdeaRow(id) {
+  await supabase.from("ideas").delete().eq("id", id);
+}
+
+function emptyIdeaForm() {
+  return {
+    title: "", category: "", summary: "", problem: "", differentiator: "",
+    targetAudience: "", standbyReason: "", nextStep: "", notes: "", sourceContent: "",
+  };
+}
+
 function FocusApp({ session }) {
   const userId = session.user.id;
   const [projects, setProjects] = useState([]);
   const [frozen, setFrozen] = useState([]);
+  const [ideas, setIdeas] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [view, setView] = useState("home"); // home | pool | frozen
+  const [loadError, setLoadError] = useState(false);
+  const [view, setView] = useState("home"); // home | pool | frozen | incubator
   const [cardIndex, setCardIndex] = useState(0);
   const [toast, setToast] = useState(null);
   const [showAdd, setShowAdd] = useState(false);
-  const [newTitle, setNewTitle] = useState("");
-  const [newTag, setNewTag] = useState("");
-  const [detail, setDetail] = useState(null); // { kind: 'project'|'frozen', id }
+  const [addMode, setAddMode] = useState("manual"); // manual | ai
+  const [ideaForm, setIdeaForm] = useState(emptyIdeaForm());
+  const [aiRawText, setAiRawText] = useState("");
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState("");
+  const [detail, setDetail] = useState(null); // { kind: 'project'|'frozen'|'idea', id }
+  const [ideaEditing, setIdeaEditing] = useState(false);
+  const [ideaEditForm, setIdeaEditForm] = useState(null);
+  const [promotingId, setPromotingId] = useState(null); // id da ideia em processo de "Transformar em projeto"
   const [newEntry, setNewEntry] = useState("");
   const [dragX, setDragX] = useState(0);
   const [dragging, setDragging] = useState(false);
   const dragStart = React.useRef(null);
   const movedRef = React.useRef(false);
 
-  useEffect(() => {
-    (async () => {
-      const [{ data: projRows, error: e1 }, { data: frozRows, error: e2 }] = await Promise.all([
-        supabase.from("projects").select("*").eq("user_id", userId).order("created_at"),
-        supabase.from("frozen_ideas").select("*").eq("user_id", userId).order("created_at"),
-      ]);
-      if (!e1 && projRows) setProjects(projRows.map(rowToProject));
-      if (!e2 && frozRows) setFrozen(frozRows.map(rowToFrozen));
+  async function loadAll(isRetry) {
+    if (!isRetry) setLoading(true);
+    setLoadError(false);
+    const [
+      { data: projRows, error: e1 },
+      { data: frozRows, error: e2 },
+      { data: ideaRows, error: e3 },
+    ] = await Promise.all([
+      supabase.from("projects").select("*").eq("user_id", userId).order("created_at"),
+      supabase.from("frozen_ideas").select("*").eq("user_id", userId).order("created_at"),
+      supabase.from("ideas").select("*").eq("user_id", userId).order("created_at"),
+    ]);
+
+    if (e1 || e2 || e3) {
+      // Nunca tratamos um erro como "está vazio" — ficamos com o que já
+      // estava carregado e mostramos um aviso, em vez de esvaziar o ecrã.
+      setLoadError(true);
       setLoading(false);
+      return false;
+    }
+    setProjects(projRows.map(rowToProject));
+    setFrozen(frozRows.map(rowToFrozen));
+    setIdeas(ideaRows.map(rowToIdea));
+    setLoading(false);
+    return true;
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const ok = await loadAll(false);
+      // Logo a seguir a um magic link a sessão pode ainda não estar
+      // totalmente pronta no primeiro pedido — tenta mais uma vez ao fim de 1s.
+      if (!ok && !cancelled) {
+        setTimeout(() => { if (!cancelled) loadAll(true); }, 1000);
+      }
     })();
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
@@ -378,6 +463,11 @@ function FocusApp({ session }) {
     if (loading) return;
     frozen.forEach((f) => saveFrozen(f, userId));
   }, [frozen, loading]);
+
+  useEffect(() => {
+    if (loading) return;
+    ideas.forEach((i) => saveIdea(i, userId));
+  }, [ideas, loading]);
 
   const active = useMemo(
     () => [...projects].sort((a, b) => b.energy - a.energy),
@@ -420,19 +510,140 @@ function FocusApp({ session }) {
     setTimeout(() => setToast(null), 1800);
   }
 
-  function addIdea() {
-    if (!newTitle.trim()) return;
+  function openAddModal() {
+    setIdeaForm(emptyIdeaForm());
+    setAiRawText("");
+    setAiError("");
+    setAddMode("manual");
+    setShowAdd(true);
+  }
+
+  function saveIdeaManual() {
+    if (!ideaForm.title.trim() || !ideaForm.summary.trim()) {
+      setAiError("Nome e resumo são obrigatórios.");
+      return;
+    }
     const id = crypto.randomUUID();
-    setFrozen((prev) => [
-      { id, title: newTitle.trim(), tag: newTag.trim() || "geral", stage: "Ideia", lifecycle: "afos", notes: [] },
+    setIdeas((prev) => [
+      {
+        id,
+        title: ideaForm.title.trim(),
+        category: ideaForm.category.trim(),
+        summary: ideaForm.summary.trim(),
+        problem: ideaForm.problem.trim(),
+        differentiator: ideaForm.differentiator.trim(),
+        targetAudience: ideaForm.targetAudience.trim(),
+        standbyReason: ideaForm.standbyReason.trim(),
+        nextStep: ideaForm.nextStep.trim(),
+        notes: ideaForm.notes.trim(),
+        sourceContent: ideaForm.sourceContent || "",
+        promotedToProjectId: null,
+        promotedAt: null,
+        createdAt: new Date().toISOString(),
+      },
       ...prev,
     ]);
-    setNewTitle("");
-    setNewTag("");
     setShowAdd(false);
-    setView("frozen");
-    setToast("Ideia guardada no Congelador.");
+    setView("incubator");
+    setToast("Ideia guardada na Incubadora.");
     setTimeout(() => setToast(null), 1800);
+  }
+
+  async function organizeWithAI() {
+    if (!aiRawText.trim()) return;
+    setAiLoading(true);
+    setAiError("");
+    try {
+      const { data, error } = await supabase.functions.invoke("organize-idea", {
+        body: { content: aiRawText },
+      });
+      if (error || data?.error) {
+        setAiError(data?.error || "Não foi possível organizar a conversa. Tenta novamente.");
+        setAiLoading(false);
+        return;
+      }
+      setIdeaForm({
+        title: data.data.title || "",
+        category: data.data.category || "",
+        summary: data.data.summary || "",
+        problem: data.data.problem || "",
+        differentiator: data.data.differentiator || "",
+        targetAudience: data.data.target_audience || "",
+        standbyReason: data.data.standby_reason || "",
+        nextStep: data.data.next_step || "",
+        notes: data.data.notes || "",
+        sourceContent: aiRawText,
+      });
+      setAddMode("manual"); // mostra os campos preenchidos para revisão antes de guardar
+      setAiLoading(false);
+    } catch (e) {
+      setAiError("Erro de rede ao contactar a IA.");
+      setAiLoading(false);
+    }
+  }
+
+  function deleteIdea(id) {
+    setIdeas((prev) => prev.filter((i) => i.id !== id));
+    deleteIdeaRow(id);
+    setDetail(null);
+    setToast("Ideia apagada.");
+    setTimeout(() => setToast(null), 1500);
+  }
+
+  function startEditIdea(idea) {
+    setIdeaEditForm({ ...idea });
+    setIdeaEditing(true);
+  }
+
+  function saveEditIdea() {
+    setIdeas((prev) => prev.map((i) => (i.id === ideaEditForm.id ? { ...ideaEditForm } : i)));
+    setIdeaEditing(false);
+    setToast("Ideia atualizada.");
+    setTimeout(() => setToast(null), 1500);
+  }
+
+  // Transformar ideia em projeto: idempotente (uma ideia já promovida não cria outro projeto),
+  // cria sempre no Congelador — nunca entra direto no Foco.
+  function promoteIdea(ideaId, lifecycle) {
+    const idea = ideas.find((i) => i.id === ideaId);
+    if (!idea) return;
+    if (idea.promotedToProjectId) {
+      setToast("Esta ideia já foi transformada em projeto.");
+      setTimeout(() => setToast(null), 1800);
+      return;
+    }
+    const firstStage = stagesFor(lifecycle)[0];
+    const defaults = (defaultTasksFor(lifecycle)[firstStage] || [])
+      .map((text, i) => ({ id: `${Date.now()}-${i}`, text, done: false, stage: firstStage }));
+    const newProjectId = crypto.randomUUID();
+    const noteParts = [idea.summary, idea.problem && `Problema: ${idea.problem}`, idea.differentiator && `Diferenciador: ${idea.differentiator}`]
+      .filter(Boolean);
+
+    setFrozen((prev) => [
+      {
+        id: newProjectId,
+        title: idea.title,
+        tag: idea.category || "geral",
+        stage: firstStage,
+        lifecycle,
+        notes: noteParts.map((text, i) => ({ id: `pn${i}`, text })),
+        tasksBackup: defaults,
+        historyBackup: [],
+      },
+      ...prev,
+    ]);
+    setIdeas((prev) =>
+      prev.map((i) =>
+        i.id === ideaId
+          ? { ...i, promotedToProjectId: newProjectId, promotedAt: new Date().toISOString() }
+          : i
+      )
+    );
+    setPromotingId(null);
+    setDetail(null);
+    setView("frozen");
+    setToast(`"${idea.title}" está agora no Congelador como projeto.`);
+    setTimeout(() => setToast(null), 2200);
   }
 
   function reactivate(id) {
@@ -575,10 +786,10 @@ function FocusApp({ session }) {
             {projects.length}/3 acordados
           </div>
           <button
-            onClick={() => setShowAdd(true)}
+            onClick={openAddModal}
             className="w-8 h-8 rounded-full flex items-center justify-center text-lg font-bold"
             style={{ background: "#C6FF3D", color: "#0B0F0E" }}
-            aria-label="Adicionar ideia"
+            aria-label="Nova ideia"
           >
             +
           </button>
@@ -594,6 +805,21 @@ function FocusApp({ session }) {
         </div>
       </div>
 
+      {loadError && (
+        <div className="mx-6 mb-4 px-4 py-3 rounded-2xl flex items-center justify-between gap-3" style={{ background: "#3a1f1c", border: "1px solid #5c2e28" }}>
+          <p className="text-xs" style={{ color: "#f2d4d0" }}>
+            Não foi possível carregar os teus dados agora. Nada foi apagado — está tudo guardado.
+          </p>
+          <button
+            onClick={() => loadAll(true)}
+            className="text-xs px-3 py-1.5 rounded-full font-semibold flex-shrink-0"
+            style={{ background: "#C6FF3D", color: "#0B0F0E" }}
+          >
+            Tentar novamente
+          </button>
+        </div>
+      )}
+
       {showAdd && (
         <div
           className="fixed inset-0 z-50 flex items-end justify-center"
@@ -601,30 +827,99 @@ function FocusApp({ session }) {
           onClick={() => setShowAdd(false)}
         >
           <div
-            className="w-full max-w-sm rounded-t-3xl p-6"
+            className="w-full max-w-sm rounded-t-3xl p-6 max-h-[85vh] overflow-y-auto"
             style={{ background: "#F2F5EC" }}
             onClick={(e) => e.stopPropagation()}
           >
-            <h3 className="display text-xl font-bold mb-4" style={{ color: "#0B0F0E" }}>
+            <h3 className="display text-xl font-bold mb-3" style={{ color: "#0B0F0E" }}>
               Nova ideia
             </h3>
-            <input
-              autoFocus
-              value={newTitle}
-              onChange={(e) => setNewTitle(e.target.value)}
-              placeholder="Título"
-              className="w-full px-4 py-3 rounded-xl mb-3 text-sm outline-none"
-              style={{ background: "#fff", border: "1px solid #d8ddd0", color: "#0B0F0E" }}
-            />
-            <input
-              value={newTag}
-              onChange={(e) => setNewTag(e.target.value)}
-              placeholder="Categoria (ex: real estate, nutrition)"
-              className="w-full px-4 py-3 rounded-xl mb-5 text-sm outline-none"
-              style={{ background: "#fff", border: "1px solid #d8ddd0", color: "#0B0F0E" }}
-            />
+
+            <div className="flex rounded-full overflow-hidden mb-4" style={{ border: "1px solid #d8ddd0" }}>
+              {[
+                { id: "manual", label: "Preencher" },
+                { id: "ai", label: "Organizar conversa com IA" },
+              ].map((opt) => (
+                <button
+                  key={opt.id}
+                  onClick={() => setAddMode(opt.id)}
+                  className="flex-1 text-xs px-2 py-2 font-semibold"
+                  style={{
+                    background: addMode === opt.id ? "#0B0F0E" : "transparent",
+                    color: addMode === opt.id ? "#C6FF3D" : "#6B756D",
+                  }}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+
+            {addMode === "ai" && (
+              <div className="mb-4">
+                <p className="text-xs mb-2" style={{ color: "#6B756D" }}>
+                  Cola aqui a conversa (ChatGPT, Claude, etc.). A IA extrai os campos por ti — revês tudo antes de guardar.
+                </p>
+                <textarea
+                  value={aiRawText}
+                  onChange={(e) => setAiRawText(e.target.value)}
+                  placeholder="Cola a conversa completa..."
+                  rows={6}
+                  className="w-full px-4 py-3 rounded-xl mb-3 text-sm outline-none"
+                  style={{ background: "#fff", border: "1px solid #d8ddd0", color: "#0B0F0E" }}
+                />
+                {aiError && <p className="text-xs mb-3" style={{ color: "#b0453a" }}>{aiError}</p>}
+                <button
+                  onClick={organizeWithAI}
+                  disabled={aiLoading || !aiRawText.trim()}
+                  className="w-full py-3 rounded-2xl font-semibold text-sm mb-2"
+                  style={{ background: "#C6FF3D", color: "#0B0F0E", opacity: aiLoading ? 0.6 : 1 }}
+                >
+                  {aiLoading ? "A organizar..." : "Organizar ideia"}
+                </button>
+              </div>
+            )}
+
+            {addMode === "manual" && (
+              <div className="space-y-2 mb-4">
+                {[
+                  ["title", "Nome *"],
+                  ["category", "Categoria (ex: AI SaaS, Produto Digital...)"],
+                  ["summary", "Resumo *"],
+                  ["problem", "Problema que resolve"],
+                  ["differentiator", "Diferenciador"],
+                  ["targetAudience", "Público-alvo"],
+                  ["standbyReason", "Porque ficou em standby"],
+                  ["nextStep", "Próximo passo quando retomar"],
+                  ["notes", "Notas"],
+                ].map(([key, label]) => (
+                  <div key={key}>
+                    <label className="text-[10px] uppercase tracking-wide font-medium" style={{ color: "#6B756D" }}>
+                      {label}
+                    </label>
+                    {["summary", "problem", "differentiator", "notes"].includes(key) ? (
+                      <textarea
+                        value={ideaForm[key]}
+                        onChange={(e) => setIdeaForm((f) => ({ ...f, [key]: e.target.value }))}
+                        rows={2}
+                        className="w-full px-3 py-2 rounded-xl text-sm outline-none"
+                        style={{ background: "#fff", border: "1px solid #d8ddd0", color: "#0B0F0E" }}
+                      />
+                    ) : (
+                      <input
+                        value={ideaForm[key]}
+                        onChange={(e) => setIdeaForm((f) => ({ ...f, [key]: e.target.value }))}
+                        className="w-full px-3 py-2 rounded-xl text-sm outline-none"
+                        style={{ background: "#fff", border: "1px solid #d8ddd0", color: "#0B0F0E" }}
+                      />
+                    )}
+                  </div>
+                ))}
+                {aiError && <p className="text-xs" style={{ color: "#b0453a" }}>{aiError}</p>}
+              </div>
+            )}
+
             <p className="text-xs mb-4" style={{ color: "#6B756D" }}>
-              Vai direto para o Congelador — sem competir já por atenção.
+              Vai para a Incubadora — sem energia, sem fases, sem competir já por atenção.
             </p>
             <div className="flex gap-2">
               <button
@@ -635,7 +930,7 @@ function FocusApp({ session }) {
                 Cancelar
               </button>
               <button
-                onClick={addIdea}
+                onClick={saveIdeaManual}
                 className="flex-1 py-3 rounded-2xl font-semibold text-sm"
                 style={{ background: "#C6FF3D", color: "#0B0F0E" }}
               >
@@ -648,14 +943,18 @@ function FocusApp({ session }) {
 
       {/* Main content */}
       <div className="flex-1 flex flex-col items-center justify-center px-6">
-        {view === "home" && !loading && !current && (
+        {view === "home" && !loading && !loadError && !current && (
           <div className="w-full max-w-sm text-center">
             <p className="display text-xl font-bold mb-2" style={{ color: "#F2F5EC" }}>
-              Sem projetos acordados
+              Não tens nenhum projeto em foco.
             </p>
-            <p className="text-sm mb-5" style={{ color: "#6B756D" }}>
-              Adiciona uma ideia (+) ou reativa algo do Congelador.
-            </p>
+            <button
+              onClick={() => setView("frozen")}
+              className="text-sm px-4 py-2 rounded-full font-medium"
+              style={{ background: "#C6FF3D", color: "#0B0F0E" }}
+            >
+              Reativar do Congelador
+            </button>
           </div>
         )}
         {view === "home" && loading && (
@@ -824,13 +1123,25 @@ function FocusApp({ session }) {
             <p className="text-xs text-center" style={{ color: "#6B756D" }}>
               {active.length > 1 ? "Desliza o card para o lado ↔ · " : ""}A energia decai −1/dia sem toque
             </p>
+            {active.length > 1 && (
+              <button
+                onClick={() => setView("pool")}
+                className="text-xs mt-2 underline"
+                style={{ color: "#8A9188" }}
+              >
+                Ver todos os projetos em foco
+              </button>
+            )}
           </div>
         )}
 
         {view === "pool" && (
           <div className="w-full max-w-sm space-y-3">
+            <button onClick={() => setView("home")} className="text-xs mb-1" style={{ color: "#8A9188" }}>
+              ‹ Foco
+            </button>
             <h2 className="display text-xl font-bold mb-2" style={{ color: "#F2F5EC" }}>
-              Projetos acordados
+              Projetos em foco
             </h2>
             {active.map((p) => (
               <div
@@ -880,10 +1191,21 @@ function FocusApp({ session }) {
               Congelador
             </h2>
             <p className="text-xs mb-3" style={{ color: "#6B756D" }}>
-              Sem culpa. Reativa quando fizer sentido.
+              Projetos reais que estão temporariamente em standby. Todo o contexto fica preservado.
             </p>
             {frozen.length === 0 && (
-              <p className="text-sm" style={{ color: "#6B756D" }}>Vazio por agora.</p>
+              <div>
+                <p className="text-sm mb-3" style={{ color: "#6B756D" }}>
+                  Os projetos que pausares ficam aqui, com todo o contexto preservado.
+                </p>
+                <button
+                  onClick={() => setView("incubator")}
+                  className="text-xs px-3 py-2 rounded-full font-medium"
+                  style={{ background: "transparent", color: "#C6FF3D", border: "1px solid #22281f" }}
+                >
+                  Ver Incubadora
+                </button>
+              </div>
             )}
             {frozen.map((f) => (
               <div
@@ -926,10 +1248,224 @@ function FocusApp({ session }) {
             ))}
           </div>
         )}
+
+        {view === "incubator" && (
+          <div className="w-full max-w-sm space-y-3">
+            <h2 className="display text-xl font-bold mb-1" style={{ color: "#F2F5EC" }}>
+              Incubadora
+            </h2>
+            <p className="text-xs mb-3" style={{ color: "#6B756D" }}>
+              Guarda aqui ideias interessantes sem as transformar já em projetos.
+            </p>
+            <div className="flex gap-2 flex-wrap mb-2">
+              <button
+                onClick={openAddModal}
+                className="text-xs px-3 py-2 rounded-full font-medium"
+                style={{ background: "#C6FF3D", color: "#0B0F0E" }}
+              >
+                + Nova ideia
+              </button>
+              <button
+                onClick={() => { openAddModal(); setAddMode("ai"); }}
+                className="text-xs px-3 py-2 rounded-full font-medium"
+                style={{ background: "transparent", color: "#C6FF3D", border: "1px solid #22281f" }}
+              >
+                Organizar conversa com IA
+              </button>
+            </div>
+            {ideas.length === 0 && (
+              <p className="text-sm" style={{ color: "#6B756D" }}>Vazio por agora.</p>
+            )}
+            {ideas.map((idea) => (
+              <div
+                key={idea.id}
+                className="rounded-2xl p-4 cursor-pointer"
+                style={{ background: "#141917", border: "1px solid #22281f" }}
+                onClick={() => setDetail({ kind: "idea", id: idea.id })}
+              >
+                <div className="flex items-center gap-2 mb-0.5">
+                  {idea.category && (
+                    <p className="text-xs uppercase" style={{ color: "#6B756D" }}>{idea.category}</p>
+                  )}
+                  {idea.promotedToProjectId && (
+                    <span className="text-[9px] px-1.5 py-0.5 rounded-full font-semibold" style={{ background: "#0B0F0E", color: "#C6FF3D" }}>
+                      já é projeto
+                    </span>
+                  )}
+                </div>
+                <p className="display font-bold mb-1" style={{ color: "#F2F5EC" }}>{idea.title}</p>
+                {idea.summary && (
+                  <p className="text-xs" style={{ color: "#8A9188" }}>
+                    {idea.summary.length > 100 ? idea.summary.slice(0, 100) + "…" : idea.summary}
+                  </p>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
+      {/* Detail modal: idea (Incubadora) */}
+      {detail && detail.kind === "idea" && (() => {
+        const idea = ideas.find((i) => i.id === detail.id);
+        if (!idea) return null;
+        const F = [
+          ["category", "Categoria"],
+          ["summary", "Resumo"],
+          ["problem", "Problema que resolve"],
+          ["differentiator", "Diferenciador"],
+          ["targetAudience", "Público-alvo"],
+          ["standbyReason", "Porque ficou em standby"],
+          ["nextStep", "Próximo passo quando retomar"],
+          ["notes", "Notas"],
+        ];
+        return (
+          <div
+            className="fixed inset-0 z-50 flex items-end justify-center"
+            style={{ background: "rgba(11,15,14,0.7)" }}
+            onClick={() => { setDetail(null); setIdeaEditing(false); setPromotingId(null); }}
+          >
+            <div
+              className="w-full max-w-sm rounded-t-3xl p-6 max-h-[85vh] overflow-y-auto"
+              style={{ background: "#F2F5EC" }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              {idea.category && (
+                <p className="text-xs uppercase tracking-wide font-medium mb-1" style={{ color: "#6B756D" }}>
+                  {idea.category}
+                </p>
+              )}
+              <h3 className="display text-2xl font-bold mb-4" style={{ color: "#0B0F0E" }}>
+                {idea.title}
+              </h3>
+
+              {idea.promotedToProjectId && (
+                <div className="mb-4 px-3 py-2 rounded-xl text-xs font-medium" style={{ background: "#dfe9d5", color: "#3d5c2e" }}>
+                  Já foi transformada em projeto e está no Congelador.
+                </div>
+              )}
+
+              {!ideaEditing ? (
+                <div className="space-y-3 mb-4">
+                  {F.map(([key, label]) =>
+                    idea[key] ? (
+                      <div key={key}>
+                        <p className="text-[10px] uppercase tracking-wide font-medium" style={{ color: "#6B756D" }}>
+                          {label}
+                        </p>
+                        <p className="text-sm" style={{ color: "#0B0F0E" }}>{idea[key]}</p>
+                      </div>
+                    ) : null
+                  )}
+                  {idea.sourceContent && (
+                    <details>
+                      <summary className="text-xs cursor-pointer" style={{ color: "#6B756D" }}>
+                        Ver conversa original
+                      </summary>
+                      <p className="text-xs mt-2 whitespace-pre-wrap" style={{ color: "#6B756D" }}>
+                        {idea.sourceContent}
+                      </p>
+                    </details>
+                  )}
+                </div>
+              ) : (
+                <div className="space-y-2 mb-4">
+                  {[["title", "Nome"], ...F].map(([key, label]) => (
+                    <div key={key}>
+                      <label className="text-[10px] uppercase tracking-wide font-medium" style={{ color: "#6B756D" }}>
+                        {label}
+                      </label>
+                      <textarea
+                        value={ideaEditForm[key] || ""}
+                        onChange={(e) => setIdeaEditForm((f) => ({ ...f, [key]: e.target.value }))}
+                        rows={key === "title" ? 1 : 2}
+                        className="w-full px-3 py-2 rounded-xl text-sm outline-none"
+                        style={{ background: "#fff", border: "1px solid #d8ddd0", color: "#0B0F0E" }}
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {promotingId === idea.id ? (
+                <div className="mb-3 p-3 rounded-xl" style={{ background: "#fff", border: "1px solid #d8ddd0" }}>
+                  <p className="text-xs font-medium mb-2" style={{ color: "#0B0F0E" }}>
+                    Escolhe o lifecycle do novo projeto:
+                  </p>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => promoteIdea(idea.id, "afos")}
+                      className="flex-1 py-2 rounded-xl text-xs font-semibold"
+                      style={{ background: "#0B0F0E", color: "#C6FF3D" }}
+                    >
+                      AFOS
+                    </button>
+                    <button
+                      onClick={() => promoteIdea(idea.id, "generic")}
+                      className="flex-1 py-2 rounded-xl text-xs font-semibold"
+                      style={{ background: "transparent", color: "#0B0F0E", border: "1px solid #0B0F0E" }}
+                    >
+                      Genérico
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex gap-2 mb-2">
+                  {ideaEditing ? (
+                    <>
+                      <button
+                        onClick={() => setIdeaEditing(false)}
+                        className="flex-1 py-3 rounded-2xl font-medium text-sm"
+                        style={{ background: "transparent", color: "#6B756D", border: "1px solid #d8ddd0" }}
+                      >
+                        Cancelar
+                      </button>
+                      <button
+                        onClick={saveEditIdea}
+                        className="flex-1 py-3 rounded-2xl font-semibold text-sm"
+                        style={{ background: "#C6FF3D", color: "#0B0F0E" }}
+                      >
+                        Guardar
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        onClick={() => startEditIdea(idea)}
+                        className="flex-1 py-3 rounded-2xl font-medium text-sm"
+                        style={{ background: "transparent", color: "#6B756D", border: "1px solid #d8ddd0" }}
+                      >
+                        Editar
+                      </button>
+                      {!idea.promotedToProjectId && (
+                        <button
+                          onClick={() => setPromotingId(idea.id)}
+                          className="flex-1 py-3 rounded-2xl font-semibold text-sm"
+                          style={{ background: "#C6FF3D", color: "#0B0F0E" }}
+                        >
+                          Transformar em projeto
+                        </button>
+                      )}
+                    </>
+                  )}
+                </div>
+              )}
+              {!ideaEditing && !promotingId && (
+                <button
+                  onClick={() => deleteIdea(idea.id)}
+                  className="w-full py-2 rounded-2xl font-medium text-xs"
+                  style={{ background: "transparent", color: "#b0453a" }}
+                >
+                  Apagar ideia
+                </button>
+              )}
+            </div>
+          </div>
+        );
+      })()}
+
       {/* Detail modal: tasks for projects, notes for frozen */}
-      {detail && (() => {
+      {detail && (detail.kind === "project" || detail.kind === "frozen") && (() => {
         const isProject = detail.kind === "project";
         const item = isProject
           ? projects.find((p) => p.id === detail.id)
@@ -1090,50 +1626,89 @@ function FocusApp({ session }) {
       {/* Bottom nav */}
       <div className="flex items-center justify-around px-6 py-5" style={{ borderTop: "1px solid #141917" }}>
         {[
-          { id: "home", label: "Foco" },
-          { id: "pool", label: "Energia" },
-          { id: "frozen", label: "Congelador" },
-        ].map((tab) => (
-          <button
-            key={tab.id}
-            onClick={() => setView(tab.id)}
-            className="flex flex-col items-center gap-1"
-          >
-            <div
-              className="w-2 h-2 rounded-full"
-              style={{ background: view === tab.id ? "#C6FF3D" : "#22281f" }}
-            />
-            <span
-              className="text-xs font-medium"
-              style={{ color: view === tab.id ? "#F2F5EC" : "#6B756D" }}
+          { id: "home", label: "Foco", match: ["home", "pool"] },
+          { id: "frozen", label: "Congelador", match: ["frozen"] },
+          { id: "incubator", label: "Incubadora", match: ["incubator"] },
+        ].map((tab) => {
+          const isActive = tab.match.includes(view);
+          return (
+            <button
+              key={tab.id}
+              onClick={() => setView(tab.id)}
+              className="flex flex-col items-center gap-1"
             >
-              {tab.label}
-            </span>
-          </button>
-        ))}
+              <div
+                className="w-2 h-2 rounded-full"
+                style={{ background: isActive ? "#C6FF3D" : "#22281f" }}
+              />
+              <span
+                className="text-xs font-medium"
+                style={{ color: isActive ? "#F2F5EC" : "#6B756D" }}
+              >
+                {tab.label}
+              </span>
+            </button>
+          );
+        })}
       </div>
     </div>
   );
 }
 
 function LoginScreen() {
+  const [mode, setMode] = useState("signin"); // signin | signup | reset
   const [email, setEmail] = useState("");
-  const [sent, setSent] = useState(false);
+  const [password, setPassword] = useState("");
+  const [confirmSent, setConfirmSent] = useState(false);
+  const [resetSent, setResetSent] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
-  async function sendLink(e) {
+  async function sendReset(e) {
     e.preventDefault();
     if (!email.trim()) return;
     setLoading(true);
     setError("");
-    const { error } = await supabase.auth.signInWithOtp({
-      email: email.trim(),
-      options: { emailRedirectTo: window.location.origin },
+    const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+      redirectTo: window.location.origin,
     });
     setLoading(false);
     if (error) setError(error.message);
-    else setSent(true);
+    else setResetSent(true);
+  }
+
+  async function submit(e) {
+    e.preventDefault();
+    if (!email.trim() || !password) return;
+    setLoading(true);
+    setError("");
+
+    if (mode === "signin") {
+      const { error } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password,
+      });
+      setLoading(false);
+      if (error) setError(error.message === "Invalid login credentials" ? "Email ou password incorretos." : error.message);
+    } else {
+      if (password.length < 6) {
+        setError("A password precisa de pelo menos 6 caracteres.");
+        setLoading(false);
+        return;
+      }
+      const { data, error } = await supabase.auth.signUp({
+        email: email.trim(),
+        password,
+      });
+      setLoading(false);
+      if (error) {
+        setError(error.message);
+      } else if (data.session) {
+        // Confirmação de email desativada no projeto → já entra logo.
+      } else {
+        setConfirmSent(true);
+      }
+    }
   }
 
   return (
@@ -1152,17 +1727,40 @@ function LoginScreen() {
         Focus
       </h1>
 
-      {sent ? (
+      {confirmSent ? (
         <div className="w-full max-w-sm rounded-3xl p-6 text-center" style={{ background: "#F2F5EC" }}>
           <p className="text-sm" style={{ color: "#0B0F0E" }}>
-            Enviámos um link de acesso para <strong>{email}</strong>. Abre-o neste telemóvel para entrares.
+            Enviámos um email de confirmação para <strong>{email}</strong>. Confirma a conta e depois entra com a tua password.
           </p>
+          <button
+            onClick={() => { setConfirmSent(false); setMode("signin"); }}
+            className="mt-4 text-xs font-semibold underline"
+            style={{ color: "#0B0F0E" }}
+          >
+            Voltar ao login
+          </button>
         </div>
-      ) : (
-        <form onSubmit={sendLink} className="w-full max-w-sm rounded-3xl p-6" style={{ background: "#F2F5EC" }}>
-          <p className="text-sm mb-4" style={{ color: "#6B756D" }}>
-            Entra com o teu email. Sem password — enviamos-te um link de acesso.
+      ) : resetSent ? (
+        <div className="w-full max-w-sm rounded-3xl p-6 text-center" style={{ background: "#F2F5EC" }}>
+          <p className="text-sm" style={{ color: "#0B0F0E" }}>
+            Enviámos um link para <strong>{email}</strong> para definires uma password nova. Abre-o e depois volta aqui para entrares.
           </p>
+          <button
+            onClick={() => { setResetSent(false); setMode("signin"); }}
+            className="mt-4 text-xs font-semibold underline"
+            style={{ color: "#0B0F0E" }}
+          >
+            Voltar ao login
+          </button>
+        </div>
+      ) : mode === "reset" ? (
+        <form onSubmit={sendReset} className="w-full max-w-sm rounded-3xl p-6" style={{ background: "#F2F5EC" }}>
+          <p className="text-sm mb-4" style={{ color: "#6B756D" }}>
+            Se já tinhas conta criada por magic link (sem password), usa isto para definires uma agora.
+          </p>
+          <label className="text-[10px] uppercase tracking-wide font-medium" style={{ color: "#6B756D" }}>
+            Email
+          </label>
           <input
             type="email"
             autoFocus
@@ -1176,23 +1774,164 @@ function LoginScreen() {
           <button
             type="submit"
             disabled={loading}
-            className="w-full py-3 rounded-2xl font-semibold text-sm"
-            style={{ background: "#C6FF3D", color: "#0B0F0E" }}
+            className="w-full py-3 rounded-2xl font-semibold text-sm mb-2"
+            style={{ background: "#C6FF3D", color: "#0B0F0E", opacity: loading ? 0.6 : 1 }}
           >
-            {loading ? "A enviar..." : "Enviar link de acesso"}
+            {loading ? "..." : "Enviar link para definir password"}
           </button>
+          <button
+            type="button"
+            onClick={() => { setMode("signin"); setError(""); }}
+            className="w-full text-xs underline"
+            style={{ color: "#6B756D" }}
+          >
+            Voltar
+          </button>
+        </form>
+      ) : (
+        <form onSubmit={submit} className="w-full max-w-sm rounded-3xl p-6" style={{ background: "#F2F5EC" }}>
+          <div className="flex rounded-full overflow-hidden mb-4" style={{ border: "1px solid #d8ddd0" }}>
+            {[
+              { id: "signin", label: "Entrar" },
+              { id: "signup", label: "Criar conta" },
+            ].map((opt) => (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => { setMode(opt.id); setError(""); }}
+                className="flex-1 text-xs px-2 py-2 font-semibold"
+                style={{
+                  background: mode === opt.id ? "#0B0F0E" : "transparent",
+                  color: mode === opt.id ? "#C6FF3D" : "#6B756D",
+                }}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+
+          <label className="text-[10px] uppercase tracking-wide font-medium" style={{ color: "#6B756D" }}>
+            Email
+          </label>
+          <input
+            type="email"
+            autoFocus
+            autoComplete="email"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            placeholder="teu@email.com"
+            className="w-full px-4 py-3 rounded-xl mb-3 text-sm outline-none"
+            style={{ background: "#fff", border: "1px solid #d8ddd0", color: "#0B0F0E" }}
+          />
+
+          <label className="text-[10px] uppercase tracking-wide font-medium" style={{ color: "#6B756D" }}>
+            Password
+          </label>
+          <input
+            type="password"
+            autoComplete={mode === "signin" ? "current-password" : "new-password"}
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            placeholder="••••••••"
+            className="w-full px-4 py-3 rounded-xl mb-3 text-sm outline-none"
+            style={{ background: "#fff", border: "1px solid #d8ddd0", color: "#0B0F0E" }}
+          />
+
+          {error && <p className="text-xs mb-3" style={{ color: "#b0453a" }}>{error}</p>}
+
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full py-3 rounded-2xl font-semibold text-sm"
+            style={{ background: "#C6FF3D", color: "#0B0F0E", opacity: loading ? 0.6 : 1 }}
+          >
+            {loading ? "..." : mode === "signin" ? "Entrar" : "Criar conta"}
+          </button>
+
+          {mode === "signin" && (
+            <button
+              type="button"
+              onClick={() => { setMode("reset"); setError(""); }}
+              className="w-full text-xs underline mt-3"
+              style={{ color: "#6B756D" }}
+            >
+              Esqueci-me da password / já tinha conta sem password
+            </button>
+          )}
         </form>
       )}
     </div>
   );
 }
 
+function SetNewPasswordScreen({ onDone }) {
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  async function submit(e) {
+    e.preventDefault();
+    if (password.length < 6) {
+      setError("A password precisa de pelo menos 6 caracteres.");
+      return;
+    }
+    setLoading(true);
+    setError("");
+    const { error } = await supabase.auth.updateUser({ password });
+    setLoading(false);
+    if (error) setError(error.message);
+    else onDone();
+  }
+
+  return (
+    <div
+      className="min-h-screen w-full flex flex-col items-center justify-center px-6"
+      style={{ background: "#0B0F0E", fontFamily: "'Inter', sans-serif" }}
+    >
+      <p className="text-xs uppercase tracking-widest mb-2" style={{ color: "#6B756D" }}>
+        Atrium Factory
+      </p>
+      <h1 className="display text-3xl font-bold mb-8" style={{ color: "#F2F5EC", fontFamily: "'Space Grotesk', sans-serif" }}>
+        Definir password
+      </h1>
+      <form onSubmit={submit} className="w-full max-w-sm rounded-3xl p-6" style={{ background: "#F2F5EC" }}>
+        <label className="text-[10px] uppercase tracking-wide font-medium" style={{ color: "#6B756D" }}>
+          Password nova
+        </label>
+        <input
+          type="password"
+          autoFocus
+          autoComplete="new-password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          placeholder="••••••••"
+          className="w-full px-4 py-3 rounded-xl mb-3 text-sm outline-none"
+          style={{ background: "#fff", border: "1px solid #d8ddd0", color: "#0B0F0E" }}
+        />
+        {error && <p className="text-xs mb-3" style={{ color: "#b0453a" }}>{error}</p>}
+        <button
+          type="submit"
+          disabled={loading}
+          className="w-full py-3 rounded-2xl font-semibold text-sm"
+          style={{ background: "#C6FF3D", color: "#0B0F0E", opacity: loading ? 0.6 : 1 }}
+        >
+          {loading ? "..." : "Guardar password"}
+        </button>
+      </form>
+    </div>
+  );
+}
+
 export default function App() {
   const [session, setSession] = useState(undefined); // undefined = a verificar, null = sem sessão
+  const [needsNewPassword, setNeedsNewPassword] = useState(false);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session));
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, s) => setSession(s));
+    const { data: listener } = supabase.auth.onAuthStateChange((event, s) => {
+      setSession(s);
+      if (event === "PASSWORD_RECOVERY") setNeedsNewPassword(true);
+    });
     return () => listener.subscription.unsubscribe();
   }, []);
 
@@ -1202,6 +1941,10 @@ export default function App() {
         <p className="text-sm" style={{ color: "#6B756D" }}>A carregar...</p>
       </div>
     );
+  }
+
+  if (needsNewPassword) {
+    return <SetNewPasswordScreen onDone={() => setNeedsNewPassword(false)} />;
   }
 
   if (!session) return <LoginScreen />;

@@ -3,11 +3,26 @@
 App pessoal de foco: energia por projeto, congelador de ideias, lifecycle AFOS/genérico.
 
 ## 1. Supabase
-1. Cria projeto em supabase.com
-2. Corre `supabase_schema.sql` (na raiz do zip, um nível acima) no SQL Editor
-3. Copia Project URL e anon key de Project Settings → API
-4. Em **Authentication → URL Configuration**, define o "Site URL" como o teu domínio Vercel (depois de fazeres o deploy) — sem isto o link de login pode redirecionar mal
-5. Por defeito o login é por "magic link" (email, sem password). Não precisas de configurar mais nada — o Supabase já envia o email automaticamente
+1. Cria projeto em supabase.com (ou usa o que já tens)
+2. Se ainda não correste o schema base, corre `supabase_schema.sql`
+3. Corre também `supabase_migration_ideas.sql` — cria a tabela `ideas` (Incubadora), aditiva, não apaga nada
+4. Copia Project URL e anon key de Project Settings → API
+5. Em **Authentication → URL Configuration**, define o "Site URL" como o teu domínio Vercel
+6. O login é por email + password. Se já tinhas conta criada por magic link (sem password), usa "Esqueci-me da password" no ecrã de login para lhe definires uma — não crias conta nova com o mesmo email
+
+## 2. Edge Function (Organizar conversa com IA)
+Esta função corre no servidor do Supabase, nunca no browser — a tua chave da Anthropic fica segura.
+
+Precisas do Supabase CLI instalado (`npm i -g supabase`):
+```
+supabase login
+supabase link --project-ref <o-teu-project-ref>   # está no URL do projeto Supabase
+supabase functions deploy organize-idea
+supabase secrets set ANTHROPIC_API_KEY=sk-ant-...
+```
+O `SUPABASE_URL` e `SUPABASE_ANON_KEY` já ficam disponíveis automaticamente dentro da função — não precisas de os configurar.
+
+Se não quiseres usar a função de IA já (ela é opcional), a Incubadora funciona na mesma com o formulário manual.
 
 ## 2. Configurar localmente
 ```
