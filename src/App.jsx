@@ -408,6 +408,7 @@ function FocusApp({ session }) {
   const [ideaEditing, setIdeaEditing] = useState(false);
   const [ideaEditForm, setIdeaEditForm] = useState(null);
   const [promotingId, setPromotingId] = useState(null); // id da ideia em processo de "Transformar em projeto"
+  const [confirmDeleteTarget, setConfirmDeleteTarget] = useState(null); // { kind, id } a confirmar apagar
   const [newEntry, setNewEntry] = useState("");
   const [dragX, setDragX] = useState(0);
   const [dragging, setDragging] = useState(false);
@@ -660,6 +661,24 @@ function FocusApp({ session }) {
     ]);
     deleteFrozenRow(id);
     setToast(`${f.title} foi reativado.`);
+    setTimeout(() => setToast(null), 1800);
+  }
+
+  // Apaga definitivamente um projeto — do Foco ou do Congelador.
+  function deleteProjectOrFrozen(kind, id) {
+    const item = kind === "project"
+      ? projects.find((p) => p.id === id)
+      : frozen.find((f) => f.id === id);
+    if (!item) return;
+    if (kind === "project") {
+      setProjects((prev) => prev.filter((x) => x.id !== id));
+      deleteProjectRow(id);
+    } else {
+      setFrozen((prev) => prev.filter((x) => x.id !== id));
+      deleteFrozenRow(id);
+    }
+    setDetail(null);
+    setToast(`${item.title} foi apagado.`);
     setTimeout(() => setToast(null), 1800);
   }
 
@@ -1476,7 +1495,7 @@ function FocusApp({ session }) {
           <div
             className="fixed inset-0 z-50 flex items-end justify-center"
             style={{ background: "rgba(11,15,14,0.7)" }}
-            onClick={() => { setDetail(null); setNewEntry(""); }}
+            onClick={() => { setDetail(null); setNewEntry(""); setConfirmDeleteTarget(null); }}
           >
             <div
               className="w-full max-w-sm rounded-t-3xl p-6 max-h-[80vh] overflow-y-auto"
@@ -1611,6 +1630,38 @@ function FocusApp({ session }) {
                   </div>
                 </div>
               )}
+
+              <div className="mt-5 pt-4" style={{ borderTop: "1px solid #d8ddd0" }}>
+                {confirmDeleteTarget?.kind === detail.kind && confirmDeleteTarget?.id === item.id ? (
+                  <div className="flex items-center gap-2">
+                    <p className="text-xs flex-1" style={{ color: "#b0453a" }}>
+                      Apagar "{item.title}" para sempre?
+                    </p>
+                    <button
+                      onClick={() => setConfirmDeleteTarget(null)}
+                      className="text-xs px-3 py-2 rounded-full font-medium"
+                      style={{ background: "transparent", color: "#6B756D", border: "1px solid #d8ddd0" }}
+                    >
+                      Cancelar
+                    </button>
+                    <button
+                      onClick={() => deleteProjectOrFrozen(detail.kind, item.id)}
+                      className="text-xs px-3 py-2 rounded-full font-semibold"
+                      style={{ background: "#b0453a", color: "#fff" }}
+                    >
+                      Apagar
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => setConfirmDeleteTarget({ kind: detail.kind, id: item.id })}
+                    className="w-full py-2 rounded-2xl font-medium text-xs"
+                    style={{ background: "transparent", color: "#b0453a" }}
+                  >
+                    Apagar {isProject ? "projeto" : "definitivamente"}
+                  </button>
+                )}
+              </div>
             </div>
           </div>
         );
